@@ -12,6 +12,7 @@ from src.components.extraccion import extraer_audio_mejorado
 from src.components.transcripcion import transcribir_audio
 from src.components.traduccion import traducir_srt
 from src.components.muxer import incrustar_subtitulos
+from src.components.metadata import agregar_metadatos_subtitulos
 
 class VocesClarasApp:
     def __init__(self, root):
@@ -238,6 +239,10 @@ class VocesClarasApp:
             try:
                 ruta_final = incrustar_subtitulos(video, srt_ing, srt_esp, formato_salida=self.formato_salida, progress_callback=self.muxer_progress)
                 if ruta_final:
+                    self.root.after(0, self.log_message, "Añadiendo metadatos de idioma...")
+                    agregar_metadatos_subtitulos(ruta_final)
+                    self.root.after(0, self.log_message, "Añadiendo metadatos de idioma...")
+                    agregar_metadatos_subtitulos(ruta_final)
                     self.root.after(0, self.log_message, f"✔ Completado: {ruta_final}")
                     # Diálogo de eliminación debe ejecutarse en hilo principal
                     self.root.after(0, self._preguntar_eliminar_original, video)

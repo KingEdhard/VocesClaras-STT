@@ -114,41 +114,18 @@ def _ejecutar_ffmpeg_progreso(comando, duracion, progress_callback=None):
     return ret == 0, stderr_total
 
 def _construir_comando_mux(archivo_video, srt_ingles, srt_espanol, formato_salida, ruta_salida):
-    """
-    Construye el comando ffmpeg para muxear sin generar conflictos de streams.
-    Se mapean explícitamente los streams de subtítulos y se asigna codec individual.
-    """
     cmd = [FFMPEG_PATH, '-y']
-    # Entradas
     cmd.extend(['-i', archivo_video.replace('\\', '/')])
     cmd.extend(['-i', srt_espanol.replace('\\', '/')])
     cmd.extend(['-i', srt_ingles.replace('\\', '/')])
-
-    # Mapear video y audio del original
     cmd.extend(['-map', '0:v', '-map', '0:a?'])
     cmd.extend(['-c:v', 'copy', '-c:a', 'copy'])
-
-    # Mapear subtítulos externos (español primero, inglés segundo)
-    cmd.extend(['-map', '1:s:0', '-map', '2:s:0'])
-
-    # Codec de subtítulos individual para cada stream
+    cmd.extend(['-map', '1', '-map', '2'])
     if formato_salida == 'mp4':
-        cmd.extend(['-c:s:0', 'mov_text', '-c:s:1', 'mov_text'])
+        cmd.extend(['-c:s', 'mov_text'])
     else:
-        cmd.extend(['-c:s:0', 'srt', '-c:s:1', 'srt'])
-
-    # Metadatos y disposiciones (aplicados en orden a los streams de subtítulos)
-    cmd.extend([
-        '-metadata:s:s:0', 'language=spa', '-metadata:s:s:0', 'title=Español Latino',
-        '-metadata:s:s:1', 'language=eng', '-metadata:s:s:1', 'title=English',
-        '-disposition:s:s:0', 'default',
-        '-disposition:s:s:1', '0'
-    ])
-
-    # Copiar metadatos globales y capítulos del original
+        cmd.extend(['-c:s', 'srt'])
     cmd.extend(['-map_metadata', '0', '-map_chapters', '0'])
-
-    # Archivo de salida
     cmd.append(ruta_salida.replace('\\', '/'))
     return cmd
 
