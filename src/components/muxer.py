@@ -60,10 +60,6 @@ def _obtener_duracion(archivo):
         return 0
 
 def _ejecutar_ffmpeg_progreso(comando, duracion, progress_callback=None):
-    """
-    Ejecuta ffmpeg, imprime barra de progreso (tqdm) y, si se proporciona,
-    llama a progress_callback(porcentaje) periódicamente.
-    """
     print("\n⏳ Multiplexando...")
     proceso = subprocess.Popen(
         comando,
@@ -74,7 +70,7 @@ def _ejecutar_ffmpeg_progreso(comando, duracion, progress_callback=None):
         errors='replace'
     )
 
-    usar_tqdm = (progress_callback is None)  # solo mostramos tqdm si no hay callback (modo consola)
+    usar_tqdm = (progress_callback is None)
     if usar_tqdm:
         pbar = tqdm(total=100, desc="Progreso", unit="%", ncols=80)
     else:
@@ -84,7 +80,7 @@ def _ejecutar_ffmpeg_progreso(comando, duracion, progress_callback=None):
     tiempo_previo = 0.0
     ultimo_porcentaje_cb = -1
     ultimo_tiempo_cb = 0.0
-    frecuencia_cb = 0.2  # segundos
+    frecuencia_cb = 0.2
 
     stderr_total = ""
     try:
@@ -96,13 +92,11 @@ def _ejecutar_ffmpeg_progreso(comando, duracion, progress_callback=None):
                 t_actual = h * 3600 + m_ * 60 + s
                 if duracion > 0:
                     progreso = (t_actual / duracion) * 100.0
-                    # Actualizar tqdm
                     if pbar:
                         incr = max(0.0, progreso - tiempo_previo)
                         if incr > 0:
                             pbar.update(incr)
                             tiempo_previo = progreso
-                    # Llamar al callback con throttling
                     if progress_callback:
                         ahora = time.time()
                         if abs(progreso - ultimo_porcentaje_cb) >= 1.0 or (ahora - ultimo_tiempo_cb) >= frecuencia_cb:
@@ -115,12 +109,11 @@ def _ejecutar_ffmpeg_progreso(comando, duracion, progress_callback=None):
     ret = proceso.wait()
     if pbar:
         pbar.close()
-    # Forzar 100% al final
     if progress_callback:
         progress_callback(100.0)
     return ret == 0, stderr_total
 
-def _construir_comando_mux(archivo_video, srt_ingles, srt_espanol, formato_salida):
+def _construir_comando_mux(archivo_video, srt_ingles, srt_espanol, formato_salida, ruta_salida):
     cmd = [FFMPEG_PATH, '-y']
     cmd.extend(['-i', archivo_video.replace('\\', '/')])
     cmd.extend(['-i', srt_espanol.replace('\\', '/')])
@@ -139,6 +132,7 @@ def _construir_comando_mux(archivo_video, srt_ingles, srt_espanol, formato_salid
         '-disposition:s:s:1', '0'
     ])
     cmd.extend(['-map_metadata', '0', '-map_chapters', '0'])
+    cmd.append(ruta_salida.replace('\\', '/'))
     return cmd
 
 def incrustar_subtitulos(archivo_video, srt_ingles, srt_espanol, formato_salida=None, progress_callback=None):
@@ -157,11 +151,16 @@ def incrustar_subtitulos(archivo_video, srt_ingles, srt_espanol, formato_salida=
     else:
         extension = formato_salida
 
-    base = os.path.splitext(archivo_video)[0]
-    ruta_salida = f"{base}_subtitulado.{extension}"
+    # Crear carpeta de salida igual que en extracción
+    dir_video = os.path.dirname(archivo_video)
+    nombre_base = os.path.splitext(os.path.basename(archivo_video))[0]
+    carpeta_salida = os.path.join(dir_video, nombre_base + "_subtitulos_generados")
+    os.makedirs(carpeta_salida, exist_ok=True)
+
+    ruta_salida = os.path.join(carpeta_salida, nombre_base + "_subtitulado." + extension)
     duracion = _obtener_duracion(archivo_video)
 
-    cmd = _construir_comando_mux(archivo_video, srt_ingles, srt_espanol, extension)
+    cmd = _construir_comando_mux(archivo_video, srt_ingles, srt_espanol, extension, ruta_salida)
     exito, stderr = _ejecutar_ffmpeg_progreso(cmd, duracion, progress_callback=progress_callback)
 
     if not exito:

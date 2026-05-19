@@ -79,6 +79,7 @@ def extraer_audio_mejorado(archivo_video, progress_callback=None):
     Extrae la pista de audio en inglés, aplica realce de diálogos y devuelve
     la ruta del WAV temporal listo para Whisper.
     Si se proporciona progress_callback(porcentaje), se llamará periódicamente.
+    Los archivos se guardan en una subcarpeta <nombre_video>_subtitulos_generados/
     """
     if not os.path.exists(archivo_video):
         print(f"✖ Archivo no encontrado: {archivo_video}")
@@ -92,9 +93,14 @@ def extraer_audio_mejorado(archivo_video, progress_callback=None):
 
     idx_audio = elegir_pista_ingles(pistas)
 
-    # Definir archivo temporal de salida (WAV)
-    base = os.path.splitext(archivo_video)[0]
-    wav_temp = base + "_dialogos_mejorados.wav"
+    # Crear carpeta de salida
+    dir_video = os.path.dirname(archivo_video)
+    nombre_base = os.path.splitext(os.path.basename(archivo_video))[0]
+    carpeta_salida = os.path.join(dir_video, nombre_base + "_subtitulos_generados")
+    os.makedirs(carpeta_salida, exist_ok=True)
+
+    # WAV dentro de la carpeta
+    wav_temp = os.path.join(carpeta_salida, nombre_base + "_dialogos_mejorados.wav")
     if os.path.exists(wav_temp):
         os.remove(wav_temp)
 
@@ -109,7 +115,7 @@ def extraer_audio_mejorado(archivo_video, progress_callback=None):
         '-ac', '1',
         '-ar', '16000',
         '-c:a', 'pcm_s16le',
-        wav_temp
+        wav_temp.replace('\\', '/')
     ]
     
     print("\n🔥 Aplicando filtro de ganancia de diálogos...")
@@ -122,11 +128,8 @@ def extraer_audio_mejorado(archivo_video, progress_callback=None):
         print(f"⏱ Duración detectada: {duracion:.1f} segundos")
     else:
         print("⚠ No se pudo determinar la duración del video. La barra de progreso no estará disponible.")
-    if duracion <= 0:
-        print("⚠ No se pudo determinar la duración del video. La barra de progreso no estará disponible.")
 
     try:
-        # Usamos Popen para leer stderr en tiempo real
         proceso = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -139,7 +142,7 @@ def extraer_audio_mejorado(archivo_video, progress_callback=None):
         patron_tiempo = re.compile(r"time=(\d+):(\d+):(\d+(?:\.\d+)?)")
         ultimo_porcentaje = -1
         ultimo_tiempo_cb = 0.0
-        frecuencia_cb = 0.2  # segundos entre llamadas al callback (5 veces/seg)
+        frecuencia_cb = 0.2
 
         for linea in proceso.stdout:
             if progress_callback and duracion > 0:
