@@ -1,6 +1,6 @@
 import os
 
-DEBUG = False  # Cambiar a True para depuración
+DEBUG = True  # Cambiar a True para depuración
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BIN_DIR = os.path.join(ROOT_DIR, 'bin')

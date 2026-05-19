@@ -80,11 +80,13 @@ class VocesClarasApp:
 
     def log_message(self, msg):
         print(msg)
+        self.root.after(0, self._insert_log, msg)
+
+    def _insert_log(self, msg):
         self.log.configure(state=tk.NORMAL)
         self.log.insert(tk.END, msg + "\n")
         self.log.see(tk.END)
         self.log.configure(state=tk.DISABLED)
-        self.root.update_idletasks()
 
     def seleccionar_videos(self):
         filetypes = [
@@ -150,92 +152,120 @@ class VocesClarasApp:
         self.procesando = False
         self.log_message("Detenido por el usuario.")
 
+    def extraccion_progress(self, porcentaje):
+        # Llamar desde el hilo principal con after para que la barra se mueva en tiempo real
+        self.root.after(0, self.actualizar_barra_tarea, porcentaje, "Extrayendo audio...")
+
     def transcripcion_progress(self, current, total):
         if total:
             porcentaje = (current / total) * 100
-            self.actualizar_barra_tarea(porcentaje, f"Transcribiendo... ({current}/{total})")
+            msg = f"Transcribiendo... ({current}/{total} segmentos)"
+            if current == total:
+                self.log_message(f"📝 Total de segmentos transcritos: {total}")
         else:
             fake = min(current * 0.5, 95)
-            self.actualizar_barra_tarea(fake, f"Transcribiendo... ({current} segmentos)")
+            msg = f"Transcribiendo... ({current} segmentos, total por determinar)"
+            porcentaje = fake
+        self.root.after(0, self.actualizar_barra_tarea, porcentaje, msg)
 
     def traduccion_progress(self, current, total):
         porcentaje = (current / total) * 100
-        self.actualizar_barra_tarea(porcentaje, f"Traduciendo... ({current}/{total})")
+        self.root.after(0, self.actualizar_barra_tarea, porcentaje, f"Traduciendo... ({current}/{total})")
+
+    def muxer_progress(self, porcentaje):
+        self.root.after(0, self.actualizar_barra_tarea, porcentaje, "Multiplexando...")
 
     def procesar_videos(self):
-        total = len(self.archivos)
-        self.log_message(f"Iniciando procesamiento de {total} vídeos...")
+        total_videos = len(self.archivos)
+        self.root.after(0, self.log_message, f"Iniciando procesamiento de {total_videos} vídeos...")
+
+        etapas_por_video = 4
+        peso_por_etapa = 100.0 / (total_videos * etapas_por_video)
+
         for i, video in enumerate(self.archivos, 1):
             if not self.procesando:
                 break
-            self.log_message(f"\n🎬 Vídeo {i}/{total}: {os.path.basename(video)}")
-            self.actualizar_barra_global((i-1)/total*100)
 
+            nombre = os.path.basename(video)
+            self.root.after(0, self.log_message, f"\n🎬 Vídeo {i}/{total_videos}: {nombre}")
+
+            progreso_base = (i - 1) * etapas_por_video * peso_por_etapa
+            self.root.after(0, self.actualizar_barra_global, progreso_base)
+
+            # 1. Extracción
             self._start_tarea = time.time()
-            self.actualizar_barra_tarea(0, "Extrayendo audio...")
+            self.root.after(0, self.actualizar_barra_tarea, 0, "Extrayendo audio...")
             try:
-                wav = extraer_audio_mejorado(video)
+                wav = extraer_audio_mejorado(video, progress_callback=self.extraccion_progress)
                 if not wav:
-                    self.log_message("⚠ Fallo en extracción de audio.")
+                    self.root.after(0, self.log_message, "⚠ Fallo en extracción de audio.")
                     continue
             except Exception as e:
-                self.log_message(f"❌ Error en extracción: {e}")
+                self.root.after(0, self.log_message, f"❌ Error en extracción: {e}")
                 continue
-            self.actualizar_barra_tarea(100, "Audio extraído")
+            self.root.after(0, self.actualizar_barra_global, progreso_base + peso_por_etapa)
 
+            # 2. Transcripción
             self._start_tarea = time.time()
-            self.actualizar_barra_tarea(0, "Transcribiendo...")
+            self.root.after(0, self.actualizar_barra_tarea, 0, "Transcribiendo...")
             try:
                 srt_ing = transcribir_audio(wav, progress_callback=self.transcripcion_progress)
                 if not srt_ing:
-                    self.log_message("⚠ Fallo en transcripción.")
+                    self.root.after(0, self.log_message, "⚠ Fallo en transcripción.")
                     if os.path.exists(wav): os.remove(wav)
                     continue
             except Exception as e:
-                self.log_message(f"❌ Error en transcripción: {e}")
+                self.root.after(0, self.log_message, f"❌ Error en transcripción: {e}")
                 if os.path.exists(wav): os.remove(wav)
                 continue
-            self.actualizar_barra_tarea(100, "Transcripción completada")
+            self.root.after(0, self.actualizar_barra_global, progreso_base + 2 * peso_por_etapa)
 
+            # 3. Traducción
             self._start_tarea = time.time()
-            self.actualizar_barra_tarea(0, "Traduciendo...")
+            self.root.after(0, self.actualizar_barra_tarea, 0, "Traduciendo...")
             try:
                 srt_esp = traducir_srt(srt_ing, progress_callback=self.traduccion_progress)
                 if not srt_esp:
-                    self.log_message("⚠ Fallo en traducción. Se incrustará solo inglés.")
+                    self.root.after(0, self.log_message, "⚠ Fallo en traducción. Se incrustará solo inglés.")
             except Exception as e:
-                self.log_message(f"❌ Error en traducción: {e}")
+                self.root.after(0, self.log_message, f"❌ Error en traducción: {e}")
                 srt_esp = None
-            self.actualizar_barra_tarea(100, "Traducción completada")
+            self.root.after(0, self.actualizar_barra_global, progreso_base + 3 * peso_por_etapa)
 
+            # 4. Multiplexado
             self._start_tarea = time.time()
-            self.actualizar_barra_tarea(0, "Multiplexando...")
+            self.root.after(0, self.actualizar_barra_tarea, 0, "Multiplexando...")
             try:
-                ruta_final = incrustar_subtitulos(video, srt_ing, srt_esp, formato_salida=self.formato_salida)
+                ruta_final = incrustar_subtitulos(video, srt_ing, srt_esp, formato_salida=self.formato_salida, progress_callback=self.muxer_progress)
                 if ruta_final:
-                    self.log_message(f"✔ Completado: {ruta_final}")
-                    if messagebox.askyesno("Eliminar original", "¿Deseas eliminar el video original?"):
-                        try:
-                            os.remove(video)
-                            self.log_message("✔ Video original eliminado.")
-                        except Exception as e:
-                            self.log_message(f"⚠ No se pudo eliminar: {e}")
+                    self.root.after(0, self.log_message, f"✔ Completado: {ruta_final}")
+                    # Diálogo de eliminación debe ejecutarse en hilo principal
+                    self.root.after(0, self._preguntar_eliminar_original, video)
                 else:
-                    self.log_message("⚠ No se pudo empaquetar. Conserva los subtítulos sueltos.")
+                    self.root.after(0, self.log_message, "⚠ No se pudo empaquetar. Conserva los subtítulos sueltos.")
             except Exception as e:
-                self.log_message(f"❌ Error en multiplexación: {e}")
-            self.actualizar_barra_tarea(100, "Finalizado")
+                self.root.after(0, self.log_message, f"❌ Error en multiplexación: {e}")
+            self.root.after(0, self.actualizar_barra_global, progreso_base + 4 * peso_por_etapa)
 
             if os.path.exists(wav):
                 os.remove(wav)
-                self.log_message("🧹 Temporal eliminado.")
+                self.root.after(0, self.log_message, "🧹 Temporal eliminado.")
 
-        self.actualizar_barra_global(100)
-        self.lbl_eta_global.config(text="Completado")
-        self.log_message("\n✅ Procesamiento completado.")
-        self.btn_iniciar.config(state=tk.NORMAL)
-        self.btn_detener.config(state=tk.DISABLED)
+        self.root.after(0, self.actualizar_barra_global, 100)
+        self.root.after(0, self.lbl_eta_global.config, {"text": "Completado"})
+        self.root.after(0, self.log_message, "\n✅ Procesamiento completado.")
+        self.root.after(0, self.btn_iniciar.config, {"state": tk.NORMAL})
+        self.root.after(0, self.btn_detener.config, {"state": tk.DISABLED})
         self.procesando = False
+
+    def _preguntar_eliminar_original(self, video):
+        """Diálogo desde el hilo principal."""
+        if messagebox.askyesno("Eliminar original", "¿Deseas eliminar el video original?"):
+            try:
+                os.remove(video)
+                self.log_message("✔ Video original eliminado.")
+            except Exception as e:
+                self.log_message(f"⚠ No se pudo eliminar: {e}")
 
 def ejecutar_interfaz():
     root = tk.Tk()

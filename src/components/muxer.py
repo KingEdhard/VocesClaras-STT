@@ -2,6 +2,7 @@ import os
 import re
 import json
 import subprocess
+import time
 from tqdm import tqdm
 from src.utils import FFMPEG_PATH, FFPROBE_PATH, DEBUG, input_validado
 
@@ -58,12 +59,33 @@ def _obtener_duracion(archivo):
     except:
         return 0
 
-def _ejecutar_ffmpeg_progreso(comando, duracion):
+def _ejecutar_ffmpeg_progreso(comando, duracion, progress_callback=None):
+    """
+    Ejecuta ffmpeg, imprime barra de progreso (tqdm) y, si se proporciona,
+    llama a progress_callback(porcentaje) periódicamente.
+    """
     print("\n⏳ Multiplexando...")
-    proceso = subprocess.Popen(comando, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, encoding='utf-8', errors='replace')
-    pbar = tqdm(total=100, desc="Progreso", unit="%", ncols=80)
+    proceso = subprocess.Popen(
+        comando,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        universal_newlines=True,
+        encoding='utf-8',
+        errors='replace'
+    )
+
+    usar_tqdm = (progress_callback is None)  # solo mostramos tqdm si no hay callback (modo consola)
+    if usar_tqdm:
+        pbar = tqdm(total=100, desc="Progreso", unit="%", ncols=80)
+    else:
+        pbar = None
+
     patron_tiempo = re.compile(r"time=(\d+):(\d+):(\d+(?:\.\d+)?)")
     tiempo_previo = 0.0
+    ultimo_porcentaje_cb = -1
+    ultimo_tiempo_cb = 0.0
+    frecuencia_cb = 0.2  # segundos
+
     stderr_total = ""
     try:
         for linea in proceso.stdout:
@@ -74,54 +96,52 @@ def _ejecutar_ffmpeg_progreso(comando, duracion):
                 t_actual = h * 3600 + m_ * 60 + s
                 if duracion > 0:
                     progreso = (t_actual / duracion) * 100.0
-                    incr = max(0.0, progreso - tiempo_previo)
-                    if incr > 0:
-                        pbar.update(incr)
-                        tiempo_previo = progreso
+                    # Actualizar tqdm
+                    if pbar:
+                        incr = max(0.0, progreso - tiempo_previo)
+                        if incr > 0:
+                            pbar.update(incr)
+                            tiempo_previo = progreso
+                    # Llamar al callback con throttling
+                    if progress_callback:
+                        ahora = time.time()
+                        if abs(progreso - ultimo_porcentaje_cb) >= 1.0 or (ahora - ultimo_tiempo_cb) >= frecuencia_cb:
+                            progress_callback(progreso)
+                            ultimo_porcentaje_cb = progreso
+                            ultimo_tiempo_cb = ahora
     except:
         pass
+
     ret = proceso.wait()
-    pbar.close()
+    if pbar:
+        pbar.close()
+    # Forzar 100% al final
+    if progress_callback:
+        progress_callback(100.0)
     return ret == 0, stderr_total
 
 def _construir_comando_mux(archivo_video, srt_ingles, srt_espanol, formato_salida):
-    """
-    Construye el comando ffmpeg para muxear.
-    Los subtítulos se mapean primero el español (como predeterminado) y luego el inglés.
-    No se copian subtítulos originales para evitar conflictos de metadatos.
-    """
     cmd = [FFMPEG_PATH, '-y']
     cmd.extend(['-i', archivo_video.replace('\\', '/')])
-    # Insertamos primero el SRT español para que sea el stream 0 de subtítulos (default)
     cmd.extend(['-i', srt_espanol.replace('\\', '/')])
     cmd.extend(['-i', srt_ingles.replace('\\', '/')])
-
-    # Mapear todas las pistas originales excepto subtítulos
     cmd.extend(['-map', '0:v', '-map', '0:a?', '-map', '0:t?', '-map', '0:d?'])
-    # No mapeamos 0:s (omitimos subtítulos originales)
-
-    # Copiar codecs originales
     cmd.extend(['-c:v', 'copy', '-c:a', 'copy', '-c:t', 'copy', '-c:d', 'copy'])
-
-    # Mapear subtítulos externos (español = stream 0, inglés = stream 1)
     cmd.extend(['-map', '1', '-map', '2'])
     if formato_salida == 'mp4':
         cmd.extend(['-c:s:0', 'mov_text', '-c:s:1', 'mov_text'])
     else:
         cmd.extend(['-c:s:0', 'srt', '-c:s:1', 'srt'])
-
-    # Metadatos y disposiciones: español predeterminado, inglés secundario
     cmd.extend([
         '-metadata:s:s:0', 'language=spa', '-metadata:s:s:0', 'title=Español Latino',
         '-metadata:s:s:1', 'language=eng', '-metadata:s:s:1', 'title=English',
         '-disposition:s:s:0', 'default',
         '-disposition:s:s:1', '0'
     ])
-
     cmd.extend(['-map_metadata', '0', '-map_chapters', '0'])
     return cmd
 
-def incrustar_subtitulos(archivo_video, srt_ingles, srt_espanol, formato_salida=None):
+def incrustar_subtitulos(archivo_video, srt_ingles, srt_espanol, formato_salida=None, progress_callback=None):
     if not os.path.exists(archivo_video):
         print("✖ No se encontró el video original.")
         return None
@@ -141,21 +161,17 @@ def incrustar_subtitulos(archivo_video, srt_ingles, srt_espanol, formato_salida=
     ruta_salida = f"{base}_subtitulado.{extension}"
     duracion = _obtener_duracion(archivo_video)
 
-    # Siempre omitimos subtítulos originales para que los nuevos queden limpios
     cmd = _construir_comando_mux(archivo_video, srt_ingles, srt_espanol, extension)
-    exito, stderr = _ejecutar_ffmpeg_progreso(cmd, duracion)
+    exito, stderr = _ejecutar_ffmpeg_progreso(cmd, duracion, progress_callback=progress_callback)
 
     if not exito:
         if DEBUG:
             print("[DEBUG] stderr del intento principal:")
             print(stderr[-2000:])
-        # Fallback: si falla por algún motivo, reintentamos sin subtítulos originales (ya lo estamos haciendo)
-        # Si sigue fallando, mostramos error
         print("✖ Error en la multiplexación. Se conserva el original.")
         return None
 
     print(f"\n✔ Nuevo archivo creado: {ruta_salida}")
-    # Preguntar si eliminar original (solo si se ejecuta por consola)
     if formato_salida is None:
         eliminar = input_validado("🗑 ¿Eliminar el video original? (s/n) [n]: ", ['s','n','si','no',''], defecto='n', map_alias={'si':'s','no':'n'})
         if eliminar == 's':

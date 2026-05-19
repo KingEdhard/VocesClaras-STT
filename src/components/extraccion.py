@@ -1,7 +1,8 @@
 import subprocess
 import json
 import os
-import tempfile
+import re
+import time
 from src.utils import FFMPEG_PATH, FFPROBE_PATH, DEBUG, input_validado
 
 def obtener_pistas_audio(archivo):
@@ -57,10 +58,27 @@ def elegir_pista_ingles(pistas):
         )
         return int(indice)
 
-def extraer_audio_mejorado(archivo_video):
+def _obtener_duracion_video(archivo):
+    """Devuelve la duración del video en segundos usando ffprobe."""
+    cmd = [
+        FFPROBE_PATH, '-v', 'error',
+        '-show_entries', 'format=duration',
+        '-of', 'json', archivo.replace('\\', '/')
+    ]
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8')
+        if res.returncode == 0 and res.stdout.strip():
+            datos = json.loads(res.stdout)
+            return float(datos.get('format', {}).get('duration', 0))
+    except:
+        pass
+    return 0.0
+
+def extraer_audio_mejorado(archivo_video, progress_callback=None):
     """
     Extrae la pista de audio en inglés, aplica realce de diálogos y devuelve
     la ruta del WAV temporal listo para Whisper.
+    Si se proporciona progress_callback(porcentaje), se llamará periódicamente.
     """
     if not os.path.exists(archivo_video):
         print(f"✖ Archivo no encontrado: {archivo_video}")
@@ -77,11 +95,10 @@ def extraer_audio_mejorado(archivo_video):
     # Definir archivo temporal de salida (WAV)
     base = os.path.splitext(archivo_video)[0]
     wav_temp = base + "_dialogos_mejorados.wav"
-    # Si existe, lo sobrescribimos (ffmpeg -y)
     if os.path.exists(wav_temp):
         os.remove(wav_temp)
 
-    # Filtro de ganancia en diálogos exactamente igual que en tu masterizador
+    # Filtro de ganancia en diálogos
     filtro = "dynaudnorm=f=150:g=31:p=0.95,firequalizer=gain=if(gte(f\\,400)\\,if(lte(f\\,4000)\\,2\\,0)\\,0)"
     
     cmd = [
@@ -89,8 +106,8 @@ def extraer_audio_mejorado(archivo_video):
         '-i', archivo_video.replace('\\', '/'),
         '-map', f'0:{idx_audio}',
         '-af', filtro,
-        '-ac', '1',          # mono
-        '-ar', '16000',      # 16 kHz para Whisper
+        '-ac', '1',
+        '-ar', '16000',
         '-c:a', 'pcm_s16le',
         wav_temp
     ]
@@ -98,17 +115,57 @@ def extraer_audio_mejorado(archivo_video):
     print("\n🔥 Aplicando filtro de ganancia de diálogos...")
     if DEBUG:
         print(f"[DEBUG] Comando: {' '.join(cmd)}")
-    
+
+    # Obtener duración para el progreso
+    duracion = _obtener_duracion_video(archivo_video)
+    if duracion > 0:
+        print(f"⏱ Duración detectada: {duracion:.1f} segundos")
+    else:
+        print("⚠ No se pudo determinar la duración del video. La barra de progreso no estará disponible.")
+    if duracion <= 0:
+        print("⚠ No se pudo determinar la duración del video. La barra de progreso no estará disponible.")
+
     try:
-        resultado = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8')
-        if resultado.returncode == 0:
+        # Usamos Popen para leer stderr en tiempo real
+        proceso = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            universal_newlines=True,
+            encoding='utf-8',
+            errors='replace'
+        )
+
+        patron_tiempo = re.compile(r"time=(\d+):(\d+):(\d+(?:\.\d+)?)")
+        ultimo_porcentaje = -1
+        ultimo_tiempo_cb = 0.0
+        frecuencia_cb = 0.2  # segundos entre llamadas al callback (5 veces/seg)
+
+        for linea in proceso.stdout:
+            if progress_callback and duracion > 0:
+                m = patron_tiempo.search(linea)
+                if m:
+                    h, m_, s = map(float, m.groups())
+                    t_actual = h * 3600 + m_ * 60 + s
+                    porcentaje = (t_actual / duracion) * 100.0
+                    ahora = time.time()
+                    if abs(porcentaje - ultimo_porcentaje) >= 1.0 or (ahora - ultimo_tiempo_cb) >= frecuencia_cb:
+                        progress_callback(porcentaje)
+                        ultimo_porcentaje = porcentaje
+                        ultimo_tiempo_cb = ahora
+
+        retorno = proceso.wait()
+        if retorno == 0:
+            if progress_callback:
+                progress_callback(100.0)
             print(f"✔ Audio extraído y mejorado: {wav_temp}")
             return wav_temp
         else:
-            print(f"✖ Error al extraer audio. Código: {resultado.returncode}")
+            print(f"✖ Error al extraer audio. Código: {retorno}")
             if DEBUG:
-                print(resultado.stderr[-1000:])
+                print("[DEBUG] No se pudo capturar salida de error porque ya fue leída línea a línea.")
             return None
+
     except Exception as e:
         print(f"✖ Excepción ejecutando ffmpeg: {e}")
         return None
