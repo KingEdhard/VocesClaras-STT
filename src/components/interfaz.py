@@ -79,8 +79,11 @@ class VocesClarasApp:
         self.log = scrolledtext.ScrolledText(frame_log, height=8, state=tk.DISABLED)
         self.log.pack(fill=tk.BOTH, expand=True)
 
-    def log_message(self, msg):
-        print(msg)
+    def log_message(self, msg, imprimir_en_consola=True):
+        """Agrega un mensaje al registro de actividad.
+        Si imprimir_en_consola es True, también lo muestra en la terminal."""
+        if imprimir_en_consola:
+            print(msg)
         self.root.after(0, self._insert_log, msg)
 
     def _insert_log(self, msg):
@@ -156,22 +159,22 @@ class VocesClarasApp:
     def extraccion_progress(self, porcentaje):
         self.root.after(0, self.actualizar_barra_tarea, porcentaje, "Extrayendo audio...")
 
-    def transcripcion_progress(self, current, total):
+    def transcripcion_progress(self, current, total, mensaje_gui=None):
         if total:
             porcentaje = (current / total) * 100
             msg = f"Transcribiendo... ({current}/{total} segmentos)"
+            
+            # Mostrar el mensaje exacto en la GUI (sin imprimir en consola)
+            if mensaje_gui:
+                self.log_message(f"🎤 {mensaje_gui}", imprimir_en_consola=False)
+            
             if current == total:
-                self.log_message(f"📝 Total de segmentos transcritos: {total}")
-            elif current % 5 == 0 or current == 1 or current == total:
-                # Mostrar progreso cada 5 segmentos, al inicio y al final
-                self.log_message(f"🎤 Progreso transcripción: {current}/{total} segmentos ({porcentaje:.0f}%)")
+                self.log_message(f"📝 Total de segmentos transcritos: {total}", imprimir_en_consola=False)
         else:
             fake = min(current * 0.5, 95)
             msg = f"Transcribiendo... ({current} segmentos, total por determinar)"
             porcentaje = fake
-            # Cuando el total es desconocido, mostrar cada 5 segmentos
-            if current % 5 == 0 or current == 1:
-                self.log_message(f"🎤 Progreso transcripción: {current} segmentos procesados...")
+        
         self.root.after(0, self.actualizar_barra_tarea, porcentaje, msg)
 
     def traduccion_progress(self, current, total):
