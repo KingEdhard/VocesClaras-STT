@@ -186,91 +186,118 @@ class VocesClarasApp:
             if not self.procesando:
                 break
 
-            # Protección anti-anidamiento
-            nombre_base_video = os.path.splitext(os.path.basename(video))[0]
-            if nombre_base_video.endswith("_subtitulado"):
-                self.root.after(0, self.log_message, f"⏭ Omitido (ya es un archivo de salida): {os.path.basename(video)}")
-                continue
-
-            nombre = os.path.basename(video)
-            self.root.after(0, self.log_message, f"\n🎬 Vídeo {i}/{total_videos}: {nombre}")
-
-            # Crear carpeta de salida desde el principio (junto al video original)
-            dir_salida_def = os.path.join(os.path.dirname(video),
-                                          nombre_base_video + "_subtitulos_generados")
-            os.makedirs(dir_salida_def, exist_ok=True)
-
-            progreso_base = (i - 1) * etapas_por_video * peso_por_etapa
-            self.root.after(0, self.actualizar_barra_global, progreso_base)
-
-            # 1. Extracción
-            self._start_tarea = time.time()
-            self.root.after(0, self.actualizar_barra_tarea, 0, "Extrayendo audio...")
+            # ========== BLOQUE PRINCIPAL CON MANEJO DE ERRORES ==========
             try:
-                wav = extraer_audio_mejorado(video, progress_callback=self.extraccion_progress)
-                if not wav:
-                    self.root.after(0, self.log_message, "⚠ Fallo en extracción de audio.")
+                # Protección anti-anidamiento
+                nombre_base_video = os.path.splitext(os.path.basename(video))[0]
+                if nombre_base_video.endswith("_subtitulado"):
+                    self.root.after(0, self.log_message, f"⏭ Omitido (ya es un archivo de salida): {os.path.basename(video)}")
                     continue
-            except Exception as e:
-                self.root.after(0, self.log_message, f"❌ Error en extracción: {e}")
-                continue
-            self.root.after(0, self.actualizar_barra_global, progreso_base + peso_por_etapa)
 
-            # 2. Transcripción
-            self._start_tarea = time.time()
-            self.root.after(0, self.actualizar_barra_tarea, 0, "Transcribiendo...")
-            try:
-                srt_ing = transcribir_audio(wav, progress_callback=self.transcripcion_progress)
-                if not srt_ing:
-                    self.root.after(0, self.log_message, "⚠ Fallo en transcripción.")
-                    if os.path.exists(wav): os.remove(wav)
+                nombre = os.path.basename(video)
+                self.root.after(0, self.log_message, f"\n🎬 Vídeo {i}/{total_videos}: {nombre}")
+
+                # Crear carpeta de salida (con protección)
+                try:
+                    dir_salida_def = os.path.join(os.path.dirname(video),
+                                                  nombre_base_video + "_subtitulos_generados")
+                    os.makedirs(dir_salida_def, exist_ok=True)
+                except Exception as e:
+                    self.root.after(0, self.log_message, f"❌ No se pudo crear carpeta de salida: {e}")
                     continue
-                # Copiar SRT inglés a la carpeta definitiva inmediatamente
-                srt_ing_final = os.path.join(dir_salida_def, os.path.basename(srt_ing))
-                shutil.copy2(srt_ing, srt_ing_final)
-                self.root.after(0, self.log_message, f"📄 Subtítulo inglés copiado: {srt_ing_final}")
+
+                progreso_base = (i - 1) * etapas_por_video * peso_por_etapa
+                self.root.after(0, self.actualizar_barra_global, progreso_base)
+
+                # 1. Extracción
+                self._start_tarea = time.time()
+                self.root.after(0, self.actualizar_barra_tarea, 0, "Extrayendo audio...")
+                try:
+                    wav = extraer_audio_mejorado(video, progress_callback=self.extraccion_progress)
+                    if not wav:
+                        self.root.after(0, self.log_message, "⚠ Fallo en extracción de audio.")
+                        continue
+                except Exception as e:
+                    self.root.after(0, self.log_message, f"❌ Error en extracción: {e}")
+                    continue
+                self.root.after(0, self.actualizar_barra_global, progreso_base + peso_por_etapa)
+
+                # 2. Transcripción
+                self._start_tarea = time.time()
+                self.root.after(0, self.actualizar_barra_tarea, 0, "Transcribiendo...")
+                srt_ing_final = None
+                try:
+                    srt_ing = transcribir_audio(wav, progress_callback=self.transcripcion_progress)
+                    if not srt_ing:
+                        self.root.after(0, self.log_message, "⚠ Fallo en transcripción.")
+                        if os.path.exists(wav):
+                            try: os.remove(wav)
+                            except: pass
+                        continue
+                    srt_ing_final = os.path.join(dir_salida_def, os.path.basename(srt_ing))
+                    shutil.copy2(srt_ing, srt_ing_final)
+                    self.root.after(0, self.log_message, f"📄 Subtítulo inglés copiado: {srt_ing_final}")
+                except Exception as e:
+                    self.root.after(0, self.log_message, f"❌ Error en transcripción: {e}")
+                    if os.path.exists(wav):
+                        try: os.remove(wav)
+                        except: pass
+                    continue
+                self.root.after(0, self.actualizar_barra_global, progreso_base + 2 * peso_por_etapa)
+
+                # 3. Traducción
+                self._start_tarea = time.time()
+                self.root.after(0, self.actualizar_barra_tarea, 0, "Traduciendo...")
+                srt_esp_final = None
+                try:
+                    srt_esp = traducir_srt(srt_ing, progress_callback=self.traduccion_progress)
+                    if srt_esp:
+                        srt_esp_final = os.path.join(dir_salida_def, os.path.basename(srt_esp))
+                        shutil.copy2(srt_esp, srt_esp_final)
+                        self.root.after(0, self.log_message, f"📄 Subtítulo español copiado: {srt_esp_final}")
+                    else:
+                        self.root.after(0, self.log_message, "⚠ Fallo en traducción. Se incrustará solo inglés.")
+                except Exception as e:
+                    self.root.after(0, self.log_message, f"❌ Error en traducción: {e}")
+                    srt_esp = None
+                self.root.after(0, self.actualizar_barra_global, progreso_base + 3 * peso_por_etapa)
+
+                # 4. Multiplexado
+                self._start_tarea = time.time()
+                self.root.after(0, self.actualizar_barra_tarea, 0, "Multiplexando...")
+                try:
+                    ruta_final = incrustar_subtitulos(video, srt_ing_final, srt_esp_final,
+                                                      formato_salida=self.formato_salida,
+                                                      progress_callback=self.muxer_progress)
+                    if ruta_final:
+                        self.root.after(0, self.log_message, f"✔ Completado: {ruta_final}")
+                        self.root.after(0, self._preguntar_eliminar_original, video)
+                    else:
+                        self.root.after(0, self.log_message, "⚠ No se pudo empaquetar. Conserva los subtítulos sueltos.")
+                except Exception as e:
+                    self.root.after(0, self.log_message, f"❌ Error en multiplexación: {e}")
+
+                self.root.after(0, self.actualizar_barra_global, progreso_base + 4 * peso_por_etapa)
+
+                # Limpieza de temporal WAV con protección
+                try:
+                    if os.path.exists(wav):
+                        os.remove(wav)
+                        self.root.after(0, self.log_message, "🧹 Temporal eliminado.")
+                except Exception as e:
+                    self.root.after(0, self.log_message, f"⚠ No se pudo eliminar temporal: {e}")
+
             except Exception as e:
-                self.root.after(0, self.log_message, f"❌ Error en transcripción: {e}")
-                if os.path.exists(wav): os.remove(wav)
+                # Captura cualquier error inesperado en este vídeo
+                self.root.after(0, self.log_message, f"❌ Error inesperado en vídeo {nombre if 'nombre' in locals() else video}: {e}")
+                # Intenta limpiar el temporal wav si existe
+                try:
+                    if 'wav' in locals() and os.path.exists(wav):
+                        os.remove(wav)
+                except:
+                    pass
                 continue
-            self.root.after(0, self.actualizar_barra_global, progreso_base + 2 * peso_por_etapa)
-
-            # 3. Traducción
-            self._start_tarea = time.time()
-            self.root.after(0, self.actualizar_barra_tarea, 0, "Traduciendo...")
-            srt_esp_final = None
-            try:
-                srt_esp = traducir_srt(srt_ing, progress_callback=self.traduccion_progress)
-                if srt_esp:
-                    srt_esp_final = os.path.join(dir_salida_def, os.path.basename(srt_esp))
-                    shutil.copy2(srt_esp, srt_esp_final)
-                    self.root.after(0, self.log_message, f"📄 Subtítulo español copiado: {srt_esp_final}")
-                else:
-                    self.root.after(0, self.log_message, "⚠ Fallo en traducción. Se incrustará solo inglés.")
-            except Exception as e:
-                self.root.after(0, self.log_message, f"❌ Error en traducción: {e}")
-                srt_esp = None
-            self.root.after(0, self.actualizar_barra_global, progreso_base + 3 * peso_por_etapa)
-
-            # 4. Multiplexado (usa las copias que ya están en dir_salida_def)
-            self._start_tarea = time.time()
-            self.root.after(0, self.actualizar_barra_tarea, 0, "Multiplexando...")
-            try:
-                ruta_final = incrustar_subtitulos(video, srt_ing_final, srt_esp_final,
-                                                  formato_salida=self.formato_salida,
-                                                  progress_callback=self.muxer_progress)
-                if ruta_final:
-                    self.root.after(0, self.log_message, f"✔ Completado: {ruta_final}")
-                    self.root.after(0, self._preguntar_eliminar_original, video)
-                else:
-                    self.root.after(0, self.log_message, "⚠ No se pudo empaquetar. Conserva los subtítulos sueltos.")
-            except Exception as e:
-                self.root.after(0, self.log_message, f"❌ Error en multiplexación: {e}")
-            self.root.after(0, self.actualizar_barra_global, progreso_base + 4 * peso_por_etapa)
-
-            if os.path.exists(wav):
-                os.remove(wav)
-                self.root.after(0, self.log_message, "🧹 Temporal eliminado.")
+            # ========== FIN BLOQUE CON MANEJO DE ERRORES ==========
 
         self.root.after(0, self.actualizar_barra_global, 100)
         self.root.after(0, self.lbl_eta_global.config, {"text": "Completado"})

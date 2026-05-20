@@ -9,6 +9,7 @@ from src.utils import FFMPEG_PATH, FFPROBE_PATH, DEBUG, input_validado
 CODECS_AUDIO_MP4 = {'aac', 'mp3', 'ac3', 'eac3', 'alac'}
 
 def _detectar_subs_incompatibles(archivo):
+    # (igual que antes, sin cambios)
     cmd = [FFPROBE_PATH, '-v', 'error', '-select_streams', 's', '-show_entries', 'stream=index,codec_name', '-of', 'json', archivo.replace('\\', '/')]
     try:
         res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8')
@@ -67,21 +68,19 @@ def _ejecutar_ffmpeg_progreso(comando, duracion, progress_callback=None):
         stderr=subprocess.STDOUT,
         universal_newlines=True,
         encoding='utf-8',
-        errors='replace'
+        errors='replace',
+        bufsize=1
     )
-
     usar_tqdm = (progress_callback is None)
     if usar_tqdm:
         pbar = tqdm(total=100, desc="Progreso", unit="%", ncols=80)
     else:
         pbar = None
-
     patron_tiempo = re.compile(r"time=(\d+):(\d+):(\d+(?:\.\d+)?)")
     tiempo_previo = 0.0
     ultimo_porcentaje_cb = -1
     ultimo_tiempo_cb = 0.0
     frecuencia_cb = 0.2
-
     stderr_total = ""
     try:
         for linea in proceso.stdout:
@@ -105,7 +104,6 @@ def _ejecutar_ffmpeg_progreso(comando, duracion, progress_callback=None):
                             ultimo_tiempo_cb = ahora
     except:
         pass
-
     ret = proceso.wait()
     if pbar:
         pbar.close()
@@ -116,24 +114,36 @@ def _ejecutar_ffmpeg_progreso(comando, duracion, progress_callback=None):
 def _construir_comando_mux(archivo_video, srt_ingles, srt_espanol, formato_salida, ruta_salida):
     cmd = [FFMPEG_PATH, '-y']
     cmd.extend(['-i', archivo_video.replace('\\', '/')])
-    cmd.extend(['-i', srt_espanol.replace('\\', '/')])
     cmd.extend(['-i', srt_ingles.replace('\\', '/')])
+    tiene_esp = False
+    if srt_espanol and os.path.exists(srt_espanol):
+        cmd.extend(['-i', srt_espanol.replace('\\', '/')])
+        tiene_esp = True
     cmd.extend(['-map', '0:v', '-map', '0:a?'])
     cmd.extend(['-c:v', 'copy', '-c:a', 'copy'])
-    cmd.extend(['-map', '1', '-map', '2'])
+    cmd.extend(['-map', '1'])
+    if tiene_esp:
+        cmd.extend(['-map', '2'])
     if formato_salida == 'mp4':
         cmd.extend(['-c:s', 'mov_text'])
     else:
         cmd.extend(['-c:s', 'srt'])
     cmd.extend(['-map_metadata', '0', '-map_chapters', '0'])
     cmd.append(ruta_salida.replace('\\', '/'))
-    return cmd
+    return cmd, tiene_esp
 
 def incrustar_subtitulos(archivo_video, srt_ingles, srt_espanol, formato_salida=None, progress_callback=None):
     if not os.path.exists(archivo_video):
         print("✖ No se encontró el video original.")
         return None
+    if not srt_ingles or not os.path.exists(srt_ingles):
+        print("✖ No se proporcionó un subtítulo en inglés válido.")
+        return None
+    if srt_espanol is None or not os.path.exists(srt_espanol):
+        print("⚠ Subtítulo en español no disponible. Se incrustará solo el inglés.")
+        srt_espanol = None
 
+    # Seleccionar formato
     if formato_salida is None:
         formato = input_validado(
             "¿Formato de salida? (1=MKV, 2=MP4) [MKV]: ",
@@ -145,28 +155,35 @@ def incrustar_subtitulos(archivo_video, srt_ingles, srt_espanol, formato_salida=
     else:
         extension = formato_salida
 
+    # Verificar compatibilidad de audio en MP4; si no compatible, cambiar a MKV automáticamente
+    if extension == 'mp4':
+        pistas = _obtener_pistas_audio(archivo_video)
+        problematicas = _detectar_audio_incompatible_mp4(pistas)
+        if problematicas:
+            print("⚠ El archivo contiene codecs de audio no soportados en MP4. Se cambiará automáticamente a MKV para evitar errores.")
+            extension = 'mkv'
+            formato_salida = 'mkv'  # forzar
+
+    # Acortar nombre base si es muy largo (evitar MAX_PATH)
     dir_video = os.path.dirname(archivo_video)
     nombre_base = os.path.splitext(os.path.basename(archivo_video))[0]
+    if len(nombre_base) > 100:
+        nombre_base = nombre_base[:97] + "..."
+        print(f"⚠ Nombre de archivo muy largo, se acortó a: {nombre_base}")
     carpeta_salida = os.path.join(dir_video, nombre_base + "_subtitulos_generados")
     os.makedirs(carpeta_salida, exist_ok=True)
-
     ruta_salida = os.path.join(carpeta_salida, nombre_base + "_subtitulado." + extension)
     duracion = _obtener_duracion(archivo_video)
-
-    cmd = _construir_comando_mux(archivo_video, srt_ingles, srt_espanol, extension, ruta_salida)
-
+    cmd, tiene_esp = _construir_comando_mux(archivo_video, srt_ingles, srt_espanol, extension, ruta_salida)
     if DEBUG:
         print("[DEBUG] Comando multiplexación:", ' '.join(cmd))
-
     exito, stderr = _ejecutar_ffmpeg_progreso(cmd, duracion, progress_callback=progress_callback)
-
     if not exito:
         if DEBUG:
             print("[DEBUG] stderr del intento principal:")
             print(stderr[-2000:])
         print("✖ Error en la multiplexación. Se conserva el original.")
         return None
-
     print(f"\n✔ Nuevo archivo creado: {ruta_salida}")
     if formato_salida is None:
         eliminar = input_validado("🗑 ¿Eliminar el video original? (s/n) [n]: ", ['s','n','si','no',''], defecto='n', map_alias={'si':'s','no':'n'})
