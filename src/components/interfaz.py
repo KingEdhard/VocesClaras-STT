@@ -72,6 +72,8 @@ class VocesClarasApp:
         self.btn_iniciar.pack(side=tk.LEFT, padx=5)
         self.btn_detener = tk.Button(frame_botones, text="⏹ Detener", command=self.detener_procesamiento, state=tk.DISABLED, height=2, bg='#f44336', fg='white')
         self.btn_detener.pack(side=tk.LEFT, padx=5)
+        self.btn_limpiar = tk.Button(frame_botones, text="🗑 Limpiar lista", command=self.limpiar_lista, height=2, bg='#FF9800', fg='white')
+        self.btn_limpiar.pack(side=tk.LEFT, padx=5)
 
         frame_log = tk.Frame(self.root, padx=10, pady=5)
         frame_log.pack(fill=tk.BOTH, expand=True)
@@ -105,6 +107,17 @@ class VocesClarasApp:
                 self.lista_archivos.insert(tk.END, os.path.basename(a))
             self.lbl_count.config(text=f"{len(self.archivos)} archivos seleccionados")
             self.log_message(f"Seleccionados {len(self.archivos)} vídeos.")
+    
+    def limpiar_lista(self):
+        """Limpia la lista de archivos seleccionados."""
+        if self.procesando:
+            self.log_message("⚠ No se puede limpiar la lista mientras se procesa.")
+            return
+        
+        self.archivos = []
+        self.lista_archivos.delete(0, tk.END)
+        self.lbl_count.config(text="0 archivos seleccionados")
+        self.log_message("🗑 Lista de archivos limpiada.")
 
     def _formato_tiempo(self, segundos):
         if segundos < 0:
@@ -144,6 +157,7 @@ class VocesClarasApp:
         if self.procesando:
             return
         self.procesando = True
+        self.btn_limpiar.config(state=tk.DISABLED)
         self.btn_iniciar.config(state=tk.DISABLED)
         self.btn_detener.config(state=tk.NORMAL)
         self._start_global = time.time()
@@ -155,6 +169,7 @@ class VocesClarasApp:
     def detener_procesamiento(self):
         self.procesando = False
         self.log_message("Detenido por el usuario.")
+        self.btn_limpiar.config(state=tk.NORMAL)
 
     def extraccion_progress(self, porcentaje):
         self.root.after(0, self.actualizar_barra_tarea, porcentaje, "Extrayendo audio...")
@@ -214,7 +229,7 @@ class VocesClarasApp:
                 # Crear carpeta de salida (con protección)
                 try:
                     dir_salida_def = os.path.join(os.path.dirname(video),
-                                                  nombre_base_video + "_subtitulos_generados")
+                                                nombre_base_video + "_subtitulos_generados")
                     os.makedirs(dir_salida_def, exist_ok=True)
                 except Exception as e:
                     self.root.after(0, self.log_message, f"❌ No se pudo crear carpeta de salida: {e}")
@@ -281,8 +296,8 @@ class VocesClarasApp:
                 self.root.after(0, self.actualizar_barra_tarea, 0, "Multiplexando...")
                 try:
                     ruta_final = incrustar_subtitulos(video, srt_ing_final, srt_esp_final,
-                                                      formato_salida=self.formato_salida,
-                                                      progress_callback=self.muxer_progress)
+                                                    formato_salida=self.formato_salida,
+                                                    progress_callback=self.muxer_progress)
                     if ruta_final:
                         self.root.after(0, self.log_message, f"✔ Completado: {ruta_final}")
                         self.root.after(0, self._preguntar_eliminar_original, video)
@@ -318,6 +333,7 @@ class VocesClarasApp:
         self.root.after(0, self.log_message, "\n✅ Procesamiento completado.")
         self.root.after(0, self.btn_iniciar.config, {"state": tk.NORMAL})
         self.root.after(0, self.btn_detener.config, {"state": tk.DISABLED})
+        self.btn_limpiar.config(state=tk.NORMAL)  # <--- LÍNEA NUEVA
         self.procesando = False
 
     def _preguntar_eliminar_original(self, video):
