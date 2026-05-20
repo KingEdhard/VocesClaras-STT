@@ -179,7 +179,6 @@ class VocesClarasApp:
             porcentaje = (current / total) * 100
             msg = f"Transcribiendo... ({current}/{total} segmentos)"
             
-            # Mostrar el mensaje exacto en la GUI (sin imprimir en consola)
             if mensaje_gui:
                 self.log_message(f"🎤 {mensaje_gui}", imprimir_en_consola=False)
             
@@ -189,6 +188,10 @@ class VocesClarasApp:
             fake = min(current * 0.5, 95)
             msg = f"Transcribiendo... ({current} segmentos, total por determinar)"
             porcentaje = fake
+            
+            # ✅ AÑADIR ESTO: mostrar mensaje_gui también cuando total es desconocido
+            if mensaje_gui:
+                self.log_message(f"🎤 {mensaje_gui}", imprimir_en_consola=False)
         
         self.root.after(0, self.actualizar_barra_tarea, porcentaje, msg)
 
